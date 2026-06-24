@@ -1,0 +1,35 @@
+# Файлы с паролями и ключами
+.env
+
+# База данных пользователей
+data/users.json
+data/pending_users.json
+
+# Системные файлы Windows
+Thumbs.db
+desktop.ini
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Виртуальное окружение
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Логи
+*.log
