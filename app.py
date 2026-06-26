@@ -83,7 +83,9 @@ def get_user(email):
     conn = get_db_connection()
     user = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
     conn.close()
-    return user
+    if user:
+        return dict(user)  # Преобразуем Row в dict
+    return None
 
 def save_user(email, password, name, role="teacher"):
     """Сохранить пользователя в БД"""
@@ -121,7 +123,9 @@ def get_pending_user(email):
     conn = get_db_connection()
     user = conn.execute("SELECT * FROM pending_users WHERE email = ?", (email,)).fetchone()
     conn.close()
-    return user
+    if user:
+        return dict(user)  # Преобразуем Row в dict
+    return None
 
 def delete_pending_user(email):
     """Удалить пользователя из pending"""
