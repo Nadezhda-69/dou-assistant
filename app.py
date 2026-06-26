@@ -36,31 +36,63 @@ SMTP_USER = st.secrets.get("SMTP_USER") or os.getenv("SMTP_USER")
 SMTP_PASS = st.secrets.get("SMTP_PASS") or os.getenv("SMTP_PASS")
 
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
+import sqlite3
+import os
+
+def get_db_connection():
+    """Получить соединение с SQLite базой данных"""
+    os.makedirs("data", exist_ok=True)
+    conn = sqlite3.connect("data/users.db")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    """Инициализировать базу данных"""
+    conn = get_db_connection()
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            email TEXT PRIMARY KEY,
+            password TEXT NOT NULL,
+            name TEXT NOT NULL,
+            role TEXT DEFAULT 'teacher',
+            created TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+# Вызвать инициализацию при старте
+init_db()
+
 def load_json(path):
-    if not os.path.exists(path): return {}
-    with open(path, "r", encoding="utf-8") as f: return json.load(f)
+    """Заглушка для совместимости"""
+    return {}
 
 def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f: json.dump(data, f, ensure_ascii=False, indent=2)
+    """Заглушка для совместимости"""
+    pass
 
-def hash_pwd(pwd): return bcrypt.hashpw(pwd.encode(), bcrypt.gensalt()).decode()
-def check_pwd(pwd, hashed): return bcrypt.checkpw(pwd.encode(), hashed.encode())
+def get_user(email):
+    """Получить пользователя из БД"""
+    conn = get_db_connection()
+    user = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+    conn.close()
+    return user
 
-def send_code_email(email, code):
-    msg = EmailMessage()
-    msg["Subject"] = "🔐 Код подтверждения: Ассистент ДОУ"
-    msg["From"] = SMTP_USER
-    msg["To"] = email
-    msg.set_content(f"Ваш код: {code}\n⏳ Действует 15 минут.\n🔒 Не передавайте третьим лицам.")
+def save_user(email, password, name, role="teacher"):
+    """Сохранить пользователя в БД"""
+    conn = get_db_connection()
     try:
-        ctx = ssl.create_default_context()
-        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=ctx) as srv:
-            srv.login(SMTP_USER, SMTP_PASS)
-            srv.send_message(msg)
+        conn.execute(
+            "INSERT INTO users (email, password, name, role) VALUES (?, ?, ?, ?)",
+            (email, password, name, role)
+        )
+        conn.commit()
         return True
-    except Exception as e:
-        st.error(f"⚠️ Ошибка отправки email: {str(e)}")
-        return False
+    except sqlite3.IntegrityError:
+        return False  # Email уже существует
+    finally:
+        conn.close()
 
 # ==================== ЭКСПОРТ И ИЗОБРАЖЕНИЯ ====================
 def export_to_pdf(text, title="Документ ДОУ"):
@@ -166,8 +198,7 @@ if st.session_state.auth_step == "login":
     password = st.text_input("Пароль", type="password")
     col1, col2 = st.columns(2)
     if col1.button("Войти", use_container_width=True):
-        users = load_json(USERS_PATH)
-        u = users.get(email)
+        u = get_user(email)
         if u and check_pwd(password, u["password"]):
             st.session_state.user = u
             st.session_state.auth_step = "dashboard"
@@ -200,25 +231,22 @@ elif st.session_state.auth_step == "register":
     st.stop()
 
 elif st.session_state.auth_step == "verify":
-    st.title("🔑 Подтверждение email")
-    st.info(f"Код отправлен на: {st.session_state.pending_email}")
-    code_input = st.text_input("6-значный код")
-    if st.button("Подтвердить", use_container_width=True):
-        pend = load_json(PENDING_PATH)
-        usr = pend.get(st.session_state.pending_email)
-        if not usr: st.error("Сессия истекла"); st.session_state.auth_step="register"
-        elif datetime.now().isoformat() > usr["expires"]: st.error("⏳ Код просрочен")
-        elif code_input != usr["code"]: st.error("❌ Неверный код")
+    st.title("🔐 Подтверждение кода")
+    code_input = st.text_input("Код из email")
+    if st.button("Подтвердить"):
+        pending = load_json(PENDING_PATH)
+        if em in pending and pending[em]["code"] == code_input:
+            hashed = pending[em]["password"]
+            if save_user(em, hashed, pending[em]["name"], "teacher"):
+                del pending[em]
+                save_json(PENDING_PATH, pending)
+                st.success("✅ Регистрация успешна! Теперь войдите.")
+                st.session_state.auth_step = "login"
+                st.rerun()
+            else:
+                st.error("❌ Ошибка сохранения")
         else:
-            users = load_json(USERS_PATH)
-            users[st.session_state.pending_email] = {"name":usr["name"], "password":usr["password"], "role":usr["role"], "created":datetime.now().isoformat()}
-            save_json(USERS_PATH, users)
-            del pend[st.session_state.pending_email]
-            save_json(PENDING_PATH, pend)
-            st.session_state.user = users[st.session_state.pending_email]
-            st.session_state.auth_step = "dashboard"
-            st.success("✅ Аккаунт активирован!")
-            st.rerun()
+            st.error("❌ Неверный код или срок истёк")
     st.stop()
 
 # ==================== ГЛАВНЫЙ ИНТЕРФЕЙС ====================
