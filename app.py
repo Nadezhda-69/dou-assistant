@@ -7,6 +7,7 @@ import ssl
 import random
 import string
 import uuid
+import base64
 import requests
 import io
 import urllib3
@@ -102,20 +103,17 @@ def generate_image_shevdevrum(prompt):
 # DEEPSEEK_CLIENT = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
 
 @st.cache_resource(ttl=1700)
-def get_gigachat_token():
+    def get_gigachat_token():
+    auth_string = f"{GIGACHAT_CLIENT_ID}:{GIGACHAT_CLIENT_SECRET}"
+    auth_bytes = base64.b64encode(auth_string.encode()).decode()
     headers = {
-        "Authorization": f"Basic {GIGACHAT_AUTH_KEY}",
+        "Authorization": f"Basic {auth_bytes}",
         "Content-Type": "application/x-www-form-urlencoded",
         "Accept": "application/json",
         "RqUID": str(uuid.uuid4())
     }
     data = {"scope": "GIGACHAT_API_PERS"}
-    resp = requests.post(
-        "https://ngw.devices.sberbank.ru:9443/api/v2/oauth",
-        headers=headers,
-        data=data,
-        verify=False
-    )
+    resp = requests.post("https://ngw.devices.sberbank.ru:9443/api/v2/oauth", headers=headers, data=data)
     resp.raise_for_status()
     return resp.json()["access_token"]
 
