@@ -79,12 +79,12 @@ def init_db():
     conn.close()
 
 def get_user(email):
-    """Получить пользователя из БД"""
+    """Получить пользователя из БД как dict"""
     conn = get_db_connection()
     user = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
     conn.close()
     if user:
-        return dict(user)  # Преобразуем Row в dict
+        return dict(user)  # ← ВАЖНО: преобразуем Row в dict
     return None
 
 def save_user(email, password, name, role="teacher"):
@@ -119,12 +119,12 @@ def save_pending_user(email, password, name, code, expires, role="teacher"):
         conn.close()
 
 def get_pending_user(email):
-    """Получить пользователя в ожидании"""
+    """Получить пользователя в ожидании как dict"""
     conn = get_db_connection()
     user = conn.execute("SELECT * FROM pending_users WHERE email = ?", (email,)).fetchone()
     conn.close()
     if user:
-        return dict(user)  # Преобразуем Row в dict
+        return dict(user)  # ← ВАЖНО: преобразуем Row в dict
     return None
 
 def delete_pending_user(email):
@@ -165,8 +165,8 @@ init_db()
 
 # ============== ИИ-ДВИЖОК ==============
 
-@st.cache_resource(ttl=1700)
 def get_gigachat_token():
+    """Получить токен GigaChat (кэшируется на 28 минут)"""
     auth_string = f"{GIGACHAT_CLIENT_ID}:{GIGACHAT_CLIENT_SECRET}"
     auth_bytes = base64.b64encode(auth_string.encode()).decode()
     headers = {
@@ -176,9 +176,26 @@ def get_gigachat_token():
         "RqUID": str(uuid.uuid4())
     }
     data = {"scope": "GIGACHAT_API_PERS"}
-    resp = requests.post("https://ngw.devices.sberbank.ru:9443/api/v2/oauth", headers=headers, data=data, verify=False)
+    resp = requests.post(
+        "https://ngw.devices.sberbank.ru:9443/api/v2/oauth",
+        headers=headers,
+        data=data,
+        verify=False
+    )
     resp.raise_for_status()
     return resp.json()["access_token"]
+
+# Кэшируем токен
+_cached_token = {"value": None, "expires": 0}
+
+def get_token():
+    """Получить кэшированный токен GigaChat"""
+    import time
+    now = time.time()
+    if _cached_token["value"] is None or now > _cached_token["expires"]:
+        _cached_token["value"] = get_gigachat_token()
+        _cached_token["expires"] = now + 1700  # 28 минут
+    return _cached_token["value"]
 
 def ask_ai(prompt, model, age_group, use_kustuk=False):
     system = """Ты методический ИИ-ассистент для воспитателей ДОУ. Работай строго по ФГОС ДО, СанПиН 2.4.3648-20 и 273-ФЗ."""
@@ -199,7 +216,7 @@ def ask_ai(prompt, model, age_group, use_kustuk=False):
     
     try:
         if model == "GigaChat":
-            token = get_gigachat_token()
+            token = get_token()
             headers = {
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json"
@@ -209,14 +226,23 @@ def ask_ai(prompt, model, age_group, use_kustuk=False):
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
                 "temperature": 0.3
             }
-            resp = requests.post("https://gigachat.devices.sberbank.ru/api/v1/chat/completions", headers=headers, json=payload, verify=False)
+            resp = requests.post(
+                "https://gigachat.devices.sberbank.ru/api/v1/chat/completions",
+                headers=headers,
+                json=payload,
+                verify=False
+            )
             resp.raise_for_status()
             return resp.json()["choices"][0]["message"]["content"]
         else:
             if not DEEPSEEK_API_KEY:
                 return "⚠️ DeepSeek API ключ не найден. Проверьте Secrets на Streamlit Cloud."
             client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
-            res = client.chat.completions.create(model="deepseek-chat", messages=[{"role":"system","content":system},{"role":"user","content":prompt}], temperature=0.3)
+            res = client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[{"role":"system","content":system},{"role":"user","content":prompt}],
+                temperature=0.3
+            )
             return res.choices[0].message.content
     except Exception as e:
         return f"⚠️ Ошибка ИИ ({model}): {str(e)}"
