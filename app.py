@@ -99,7 +99,7 @@ def generate_image_shevdevrum(prompt):
         return None
 
 # ==================== ИИ-ДВИЖОК ====================
-DEEPSEEK_CLIENT = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+# DEEPSEEK_CLIENT = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
 
 @st.cache_resource(ttl=1700)
 def get_gigachat_token():
