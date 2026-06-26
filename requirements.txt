@@ -3,3 +3,5 @@ openai
 requests
 python-dotenv
 bcrypt
+fpdf2
+python-docx
