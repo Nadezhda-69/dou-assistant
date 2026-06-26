@@ -38,14 +38,25 @@ SMTP_PASS = st.secrets.get("SMTP_PASS") or os.getenv("SMTP_PASS")
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 import sqlite3
 import os
+# 1. Сначала get_db_connection()
+def get_db_connection():
+    """Получить соединение с SQLite базой данных"""
+    os.makedirs("data", exist_ok=True)
+    conn = sqlite3.connect("data/users.db")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+# 2. Потом hash_pwd()
 def hash_pwd(pwd):
     """Захешировать пароль"""
     return bcrypt.hashpw(pwd.encode(), bcrypt.gensalt()).decode()
 
+# 3. Потом check_pwd()
 def check_pwd(pwd, hashed):
     """Проверить пароль"""
     return bcrypt.checkpw(pwd.encode(), hashed.encode())
 
+# 4. Потом init_db()
 def init_db():
     """Инициализировать базу данных"""
     conn = get_db_connection()
@@ -61,6 +72,7 @@ def init_db():
     conn.commit()
     conn.close()
 
+# 5. Потом get_user()
 def get_user(email):
     """Получить пользователя из БД"""
     conn = get_db_connection()
@@ -68,6 +80,7 @@ def get_user(email):
     conn.close()
     return user
 
+# 6. Потом save_user()
 def save_user(email, password, name, role="teacher"):
     """Сохранить пользователя в БД"""
     conn = get_db_connection()
@@ -83,7 +96,7 @@ def save_user(email, password, name, role="teacher"):
     finally:
         conn.close()
 
-# Инициализировать БД при старте
+# 7. И только ПОСЛЕ всех функций вызвать init_db()
 init_db()
 def get_db_connection():
     """Получить соединение с SQLite базой данных"""
