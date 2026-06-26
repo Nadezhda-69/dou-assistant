@@ -166,23 +166,38 @@ init_db()
 # ============== ИИ-ДВИЖОК ==============
 
 def get_gigachat_token():
-    """Получить токен GigaChat (кэшируется на 28 минут)"""
-    auth_string = f"{GIGACHAT_CLIENT_ID}:{GIGACHAT_CLIENT_SECRET}"
-    auth_bytes = base64.b64encode(auth_string.encode()).decode()
+    """Получить токен GigaChat используя Authorization key"""
+    # Используем Authorization key напрямую
+    auth_key = st.secrets.get("GIGACHAT_AUTH_KEY") or os.getenv("GIGACHAT_AUTH_KEY")
+    
+    if not auth_key:
+        # Пробуем CLIENT_SECRET как запасной вариант
+        auth_key = st.secrets.get("GIGACHAT_CLIENT_SECRET") or os.getenv("GIGACHAT_CLIENT_SECRET")
+    
+    if not auth_key:
+        raise Exception("GigaChat Authorization key не найден!")
+    
     headers = {
-        "Authorization": f"Basic {auth_bytes}",
+        "Authorization": f"Basic {auth_key}",
         "Content-Type": "application/x-www-form-urlencoded",
         "Accept": "application/json",
         "RqUID": str(uuid.uuid4())
     }
     data = {"scope": "GIGACHAT_API_PERS"}
+    
     resp = requests.post(
         "https://ngw.devices.sberbank.ru:9443/api/v2/oauth",
         headers=headers,
         data=data,
-        verify=False
+        verify=False,
+        timeout=10
     )
-    resp.raise_for_status()
+    
+    if resp.status_code != 200:
+        print(f"❌ Ошибка GigaChat: {resp.status_code}")
+        print(f"Текст: {resp.text}")
+        raise Exception(f"GigaChat API error: {resp.status_code}")
+    
     return resp.json()["access_token"]
 
 # Кэшируем токен
