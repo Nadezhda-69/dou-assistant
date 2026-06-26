@@ -11,6 +11,7 @@ import base64
 import requests
 import io
 import urllib3
+import sqlite3
 from openai import OpenAI
 from email.message import EmailMessage
 from datetime import datetime, timedelta
@@ -19,9 +20,8 @@ from fpdf import FPDF
 from docx import Document
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-import streamlit as st
 
-# ==================== КОНФИГУРАЦИЯ ====================
+# ============== КОНФИГУРАЦИЯ ==============
 USERS_PATH = "data/users.json"
 PENDING_PATH = "data/pending_users.json"
 os.makedirs("data", exist_ok=True)
@@ -35,10 +35,8 @@ SMTP_PORT = int(st.secrets.get("SMTP_PORT") or os.getenv("SMTP_PORT", "465"))
 SMTP_USER = st.secrets.get("SMTP_USER") or os.getenv("SMTP_USER")
 SMTP_PASS = st.secrets.get("SMTP_PASS") or os.getenv("SMTP_PASS")
 
-# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
-import sqlite3
-import os
-# 1. Сначала get_db_connection()
+# ============== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==============
+
 def get_db_connection():
     """Получить соединение с SQLite базой данных"""
     os.makedirs("data", exist_ok=True)
@@ -46,17 +44,14 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
-# 2. Потом hash_pwd()
 def hash_pwd(pwd):
     """Захешировать пароль"""
     return bcrypt.hashpw(pwd.encode(), bcrypt.gensalt()).decode()
 
-# 3. Потом check_pwd()
 def check_pwd(pwd, hashed):
     """Проверить пароль"""
     return bcrypt.checkpw(pwd.encode(), hashed.encode())
 
-# 4. Потом init_db()
 def init_db():
     """Инициализировать базу данных"""
     conn = get_db_connection()
@@ -72,7 +67,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-# 5. Потом get_user()
 def get_user(email):
     """Получить пользователя из БД"""
     conn = get_db_connection()
@@ -80,7 +74,6 @@ def get_user(email):
     conn.close()
     return user
 
-# 6. Потом save_user()
 def save_user(email, password, name, role="teacher"):
     """Сохранить пользователя в БД"""
     conn = get_db_connection()
@@ -96,32 +89,23 @@ def save_user(email, password, name, role="teacher"):
     finally:
         conn.close()
 
-# 7. И только ПОСЛЕ всех функций вызвать init_db()
-init_db()
-def get_db_connection():
-    """Получить соединение с SQLite базой данных"""
-    os.makedirs("data", exist_ok=True)
-    conn = sqlite3.connect("data/users.db")
-    conn.row_factory = sqlite3.Row
-    return conn
-
-def init_db():
-    """Инициализировать базу данных"""
-    conn = get_db_connection()
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            email TEXT PRIMARY KEY,
-            password TEXT NOT NULL,
-            name TEXT NOT NULL,
-            role TEXT DEFAULT 'teacher',
-            created TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-# Вызвать инициализацию при старте
-init_db()
+def send_code_email(email, code):
+    """Отправить код подтверждения на email"""
+    try:
+        msg = EmailMessage()
+        msg["Subject"] = "🔐 Код подтверждения: Ассистент ДОУ"
+        msg["From"] = SMTP_USER
+        msg["To"] = email
+        msg.set_content(f"Ваш код: {code}\n🔒 Действует 15 минут.\n🚫 Не передавайте третьим лицам.")
+        
+        ctx = ssl.create_default_context()
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=ctx) as srv:
+            srv.login(SMTP_USER, SMTP_PASS)
+            srv.send_message(msg)
+        return True
+    except Exception as e:
+        print(f"Ошибка отправки email: {e}")
+        return False
 
 def load_json(path):
     """Заглушка для совместимости"""
@@ -131,69 +115,14 @@ def save_json(path, data):
     """Заглушка для совместимости"""
     pass
 
-def get_user(email):
-    """Получить пользователя из БД"""
-    conn = get_db_connection()
-    user = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
-    conn.close()
-    return user
+# Инициализировать БД при старте
+init_db()
 
-def save_user(email, password, name, role="teacher"):
-    """Сохранить пользователя в БД"""
-    conn = get_db_connection()
-    try:
-        conn.execute(
-            "INSERT INTO users (email, password, name, role) VALUES (?, ?, ?, ?)",
-            (email, password, name, role)
-        )
-        conn.commit()
-        return True
-    except sqlite3.IntegrityError:
-        return False  # Email уже существует
-    finally:
-        conn.close()
+# ============== ИИ-ДВИЖОК ==============
 
-# ==================== ЭКСПОРТ И ИЗОБРАЖЕНИЯ ====================
-def export_to_pdf(text, title="Документ ДОУ"):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_font("DejaVu", "", "DejaVuSans.ttf", uni=True)
-    pdf.add_font("DejaVu", "B", "DejaVuSans-Bold.ttf", uni=True)
-    pdf.set_font("DejaVu", "B", 16)
-    pdf.cell(0, 10, title, align="C")
-    pdf.ln(10)
-    pdf.set_font("DejaVu", "", 12)
-    for line in text.split("\n"):
-        if line.strip():
-            pdf.multi_cell(0, 6, line)
-            pdf.ln(2)
-    return pdf.output(dest="S").encode("latin-1") if pdf.output else pdf.output()
-
-def export_to_docx(text, title="Документ ДОУ"):
-    doc = Document()
-    doc.add_heading(title, level=1)
-    for line in text.split("\n"):
-        if line.strip():
-            doc.add_paragraph(line)
-    buf = io.BytesIO()
-    doc.save(buf)
-    buf.seek(0)
-    return buf.read()
-
-def generate_image_shevdevrum(prompt):
-    try:
-        safe_prompt = requests.utils.quote(prompt.replace(" ", "+"))
-        img_url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width=1024&height=768&nologo=true"
-        return img_url
-    except Exception as e:
-        st.error(f"⚠️ Ошибка генерации изображения: {str(e)}")
-        return None
-
-# ==================== ИИ-ДВИЖОК ====================
-# DEEPSEEK_CLIENT = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
 @st.cache_resource(ttl=1700)
 def get_gigachat_token():
+    import base64
     auth_string = f"{GIGACHAT_CLIENT_ID}:{GIGACHAT_CLIENT_SECRET}"
     auth_bytes = base64.b64encode(auth_string.encode()).decode()
     headers = {
@@ -208,7 +137,7 @@ def get_gigachat_token():
     return resp.json()["access_token"]
 
 def ask_ai(prompt, model, age_group, use_kustuk=False):
-    system = """Ты методический ИИ-ассистент для воспитателей ДОУ. Работай строго по ФОП ДО, ФГОС ДО, СанПиН 2.4.3648-20 и 273-ФЗ."""
+    system = """Ты методический ИИ-ассистент для воспитателей ДОУ. Работай строго по ФГОС ДО, СанПиН 2.4.3648-20 и 273-ФЗ."""
     
     if use_kustuk:
         system += """
@@ -222,78 +151,105 @@ def ask_ai(prompt, model, age_group, use_kustuk=False):
 - Социально-коммуникативное: уважение к старшим, бережное отношение к природе
 - При генерации указывай, какие элементы относятся к федеральному компоненту, а какие — к региональному «Кустук»."""
     
-    system += f"""
-Возрастная группа: {age_group}. 
-⚠️ Не запрашивай и не храни ФИО детей. Используй ID или обобщённые формулировки.
-Если норматив не найден — помечай: «Требует методической проверки».
-Формат: структурированный текст, готовый к копированию."""
-
+    system += f"\n\nВозрастная группа: {age_group}."
+    
     try:
         if model == "GigaChat":
             token = get_gigachat_token()
-            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json", "RqUID": str(uuid.uuid4())}
-            payload = {"model": "GigaChat", "messages": [{"role":"system","content":system},{"role":"user","content":prompt}], "temperature":0.3, "max_tokens":2500}
-            resp = requests.post(
-                "https://gigachat.devices.sberbank.ru/api/v1/chat/completions", 
-                headers=headers, 
-                json=payload,
-                verify=False
-            )
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": "GigaChat",
+                "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+                "temperature": 0.3
+            }
+            resp = requests.post("https://gigachat.devices.sberbank.ru/api/v1/chat/completions", headers=headers, json=payload)
             resp.raise_for_status()
             return resp.json()["choices"][0]["message"]["content"]
         else:
-            res = DEEPSEEK_CLIENT.chat.completions.create(model="deepseek-chat", messages=[{"role":"system","content":system},{"role":"user","content":prompt}], temperature=0.3)
+            if not DEEPSEEK_API_KEY:
+                return "⚠️ DeepSeek API ключ не найден. Проверьте Secrets на Streamlit Cloud."
+            client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+            res = client.chat.completions.create(model="deepseek-chat", messages=[{"role":"system","content":system},{"role":"user","content":prompt}], temperature=0.3)
             return res.choices[0].message.content
     except Exception as e:
-        return f"️ Ошибка ИИ ({model}): {str(e)}"
+        return f"⚠️ Ошибка ИИ ({model}): {str(e)}"
 
-# ==================== АВТОРИЗАЦИЯ ====================
-if "auth_step" not in st.session_state: st.session_state.auth_step = "login"
+# ============== АВТОРИЗАЦИЯ ==============
+if "auth_step" not in st.session_state:
+    st.session_state.auth_step = "login"
+
 st.set_page_config(page_title="Ассистент ДОУ «Кустук»", layout="wide")
 
 if st.session_state.auth_step == "login":
     st.title("🔐 Вход в систему")
-    email = st.text_input("Email")
-    password = st.text_input("Пароль", type="password")
+    email = st.text_input("Email", key="login_email")
+    password = st.text_input("Пароль", type="password", key="login_pass")
+    
     col1, col2 = st.columns(2)
-    if col1.button("Войти", use_container_width=True):
+    
+    if col1.button("🔐 Войти", use_container_width=True):
         u = get_user(email)
         if u and check_pwd(password, u["password"]):
-            st.session_state.user = u
+            st.session_state.user = {"email": email, "name": u["name"], "role": u.get("role", "teacher")}
             st.session_state.auth_step = "dashboard"
+            st.success(f"Добро пожаловать, {u['name']}!")
             st.rerun()
-        else: st.error("Неверный email или пароль")
+        else:
+            st.error("❌ Неверный email или пароль")
+    
     if col2.button("📝 Регистрация", use_container_width=True):
         st.session_state.auth_step = "register"
         st.rerun()
+    
     st.stop()
 
 elif st.session_state.auth_step == "register":
     st.title("📝 Регистрация воспитателя")
-    em = st.text_input("Корпоративный email")
-    name = st.text_input("ФИО")
-    p1 = st.text_input("Пароль", type="password")
-    p2 = st.text_input("Повторите пароль", type="password")
-    if st.button("Получить код", use_container_width=True):
-        if not all([em,name,p1,p2]): st.error("Заполните все поля")
-        elif p1!=p2: st.error("Пароли не совпадают")
-        elif em in load_json(USERS_PATH) or em in load_json(PENDING_PATH): st.error("Email уже используется")
+    em = st.text_input("Корпоративный email", key="reg_email")
+    name = st.text_input("ФИО", key="reg_name")
+    p1 = st.text_input("Пароль", type="password", key="reg_pass1")
+    p2 = st.text_input("Повторите пароль", type="password", key="reg_pass2")
+    
+    if st.button("📧 Получить код", use_container_width=True):
+        if not all([em, name, p1, p2]):
+            st.error("❌ Заполните все поля")
+        elif p1 != p2:
+            st.error("❌ Пароли не совпадают")
         else:
-            code = "".join(random.choices(string.digits, k=6))
-            save_json(PENDING_PATH, load_json(PENDING_PATH) | {em: {"name":name, "password":hash_pwd(p1), "role":"teacher", "code":code, "expires":(datetime.now()+timedelta(minutes=15)).isoformat()}})
-            if send_code_email(em, code):
-                st.session_state.pending_email = em
-                st.session_state.auth_step = "verify"
-                st.success("✅ Код отправлен. Проверьте папку «Спам».")
-                st.rerun()
-    if st.button("← Назад"): st.session_state.auth_step = "login"; st.rerun()
+            existing = get_user(em)
+            if existing:
+                st.error("❌ Email уже зарегистрирован")
+            else:
+                code = "".join(random.choices(string.digits, k=6))
+                hashed = hash_pwd(p1)
+                pending = {em: {"name": name, "password": hashed, "role": "teacher", "code": code, "expires": (datetime.now() + timedelta(minutes=15)).isoformat()}}
+                save_json(PENDING_PATH, pending)
+                
+                if send_code_email(em, code):
+                    st.session_state.pending_email = em
+                    st.session_state.auth_step = "verify"
+                    st.success("✅ Код отправлен. Проверьте папку «Спам».")
+                    st.rerun()
+                else:
+                    st.error("❌ Ошибка отправки email. Проверьте настройки SMTP.")
+    
+    if st.button("← Назад"):
+        st.session_state.auth_step = "login"
+        st.rerun()
+    
     st.stop()
 
 elif st.session_state.auth_step == "verify":
     st.title("🔐 Подтверждение кода")
     code_input = st.text_input("Код из email")
+    
     if st.button("Подтвердить"):
         pending = load_json(PENDING_PATH)
+        em = st.session_state.get("pending_email", "")
+        
         if em in pending and pending[em]["code"] == code_input:
             hashed = pending[em]["password"]
             if save_user(em, hashed, pending[em]["name"], "teacher"):
@@ -306,113 +262,119 @@ elif st.session_state.auth_step == "verify":
                 st.error("❌ Ошибка сохранения")
         else:
             st.error("❌ Неверный код или срок истёк")
+    
+    if st.button("← Назад"):
+        st.session_state.auth_step = "login"
+        st.rerun()
+    
     st.stop()
 
-# ==================== ГЛАВНЫЙ ИНТЕРФЕЙС ====================
+# ============== ГЛАВНЫЙ ИНТЕРФЕЙС ==============
 elif st.session_state.auth_step == "dashboard" and "user" in st.session_state:
     user = st.session_state.user
     st.sidebar.success(f"👤 {user['name']} | {user['role'].capitalize()}")
+    
     if st.sidebar.button("🚪 Выйти"):
-        del st.session_state.user; st.session_state.auth_step="login"; st.rerun()
-
-    ai_model = st.sidebar.selectbox(" Модель ИИ", ["GigaChat", "DeepSeek"])
-    age_group = st.sidebar.selectbox("🎯 Возрастная группа", ["2-3 года", "3-4 года", "4-5 лет", "5-6 лет", "6-7 лет"])
-    use_kustuk = st.sidebar.checkbox("🌈 Программа «Кустук»", value=False)
-    if use_kustuk:
-        st.sidebar.info("Активирован региональный компонент РС(Я)")
-
-    menu = ["📅 Календарный план", "📊 Диагностика", "🤖 ИИ-чат", "🌈 Программа «Кустук»", "📖 НПА"]
-    if user["role"] == "admin": menu.append("👥 Пользователи")
-    page = st.sidebar.radio("Модули", menu)
-
-    st.title(page)
-
-    if "last_result" not in st.session_state: st.session_state.last_result = ""
-    if "last_img" not in st.session_state: st.session_state.last_img = None
-
-    def show_exports(text, title_prefix="Документ"):
-        col1, col2 = st.columns(2)
-        if col1.button(" Скачать PDF"):
-            pdf_bytes = export_to_pdf(text, f"{title_prefix} ({age_group})")
-            st.download_button("💾 Скачать PDF", data=pdf_bytes, file_name=f"{title_prefix.lower().replace(' ','_')}.pdf", mime="application/pdf")
-        if col2.button("📝 Скачать Word"):
-            doc_bytes = export_to_docx(text, f"{title_prefix} ({age_group})")
-            st.download_button("💾 Скачать Word", data=doc_bytes, file_name=f"{title_prefix.lower().replace(' ','_')}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-
-    if page == "📅 Календарный план":
-        theme = st.text_input("Тема недели/месяца")
-        focus = st.multiselect("Фокус развития", ["Речь", "Познание", "Социализация", "Движение", "Творчество"])
-        if st.button("🧠 Сгенерировать план"):
-            kustuk_note = "\n\nДОБАВЬ региональный компонент «Кустук»: укажи интеграцию якутского фольклора, национальных игр, этнокультурных ценностей. Раздели пункты на федеральные и региональные." if use_kustuk else ""
-            with st.spinner("Генерация..."):
-                res = ask_ai(f"Составь календарный план для группы {age_group}. Тема: '{theme}'. Фокус: {', '.join(focus)}. Включи режимные моменты, НОД, прогулку, игры, работу с родителями. Соответствие ФОП/ФГОС.{kustuk_note}", ai_model, age_group, use_kustuk)
-            st.session_state.last_result = res
-            st.markdown(res)
-            show_exports(res, "Календарный план")
-            st.divider()
-            if st.button("🖼️ Сгенерировать иллюстрацию к теме"):
-                with st.spinner("Создаю изображение..."):
-                    st.session_state.last_img = generate_image_shevdevrum(f"детский сад, образовательная иллюстрация, {theme}, {age_group}, стиль: акварель, добрый, методический материал")
-            if st.session_state.last_img:
-                st.image(st.session_state.last_img, caption=f"Иллюстрация: {theme}", use_container_width=True)
-
-    elif page == "📊 Диагностика":
-        period = st.selectbox("Период", ["Начало года", "Середина года", "Конец года"])
-        domain = st.selectbox("Область", ["Речевое", "Познавательное", "Социально-коммуникативное", "Физическое", "Художественно-эстетическое"])
-        data_in = st.text_area("Наблюдаемые показатели (без ФИО, используйте ID или обобщённо)")
-        if st.button("🔍 Анализ"):
-            kustuk_note = "\n\nОцени динамику с учётом регионального компонента «Кустук»." if use_kustuk else ""
-            with st.spinner("Анализ..."):
-                res = ask_ai(f"Анализ диагностики за {period}, группа {age_group}, область: {domain}. Данные: {data_in}. Выводы, динамика, коррекционные действия. ФГОС/ФОП.{kustuk_note}", ai_model, age_group, use_kustuk)
-            st.session_state.last_result = res
-            st.markdown(res)
-            show_exports(res, "Диагностика")
-
-    elif page == " ИИ-чат":
-        if "chat" not in st.session_state: st.session_state.chat = []
-        inp = st.chat_input("Задайте вопрос...")
-        if inp:
-            st.session_state.chat.append({"role":"user","content":inp})
-            with st.spinner("Думаю..."):
-                full = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.chat[-4:]])
-                reply = ask_ai(full, ai_model, age_group, use_kustuk)
-                st.session_state.chat.append({"role":"assistant","content":reply})
-            for m in st.session_state.chat:
-                with st.chat_message(m["role"]): st.write(m["content"])
-            st.session_state.last_result = reply
-            st.divider()
-            show_exports(reply, "Диалог с ИИ")
-
-    elif page == "🌈 Программа «Кустук»":
-        st.markdown("### 📜 Региональная программа «Кустук» (РС Якутия)")
-        kustuk_section = st.selectbox("📂 Раздел генерации", ["📅 Тематическое планирование", "🎮 Национальные игры", "📚 Фольклор и язык", "🎨 Творчество", "🤝 Работа с родителями"])
+        del st.session_state.user
+        st.session_state.auth_step = "login"
+        st.rerun()
+    
+    ai_model = st.sidebar.selectbox("🤖 Модель ИИ", ["GigaChat", "DeepSeek"])
+    age_group = st.sidebar.selectbox("👶 Возрастная группа", ["2-3 года", "3-4 года", "4-5 лет", "5-6 лет", "6-7 лет"])
+    use_kustuk = st.sidebar.checkbox("🌈 Программа «Кустук»", value=True)
+    
+    st.sidebar.markdown("---")
+    module = st.sidebar.radio("📚 Модули", ["Календарный план", "Диагностика", "ИИ-чат", "Программа «Кустук»", "НПА"])
+    
+    st.title(f"📋 {module}")
+    
+    if module == "Календарный план":
+        period = st.selectbox("Период", ["Сентябрь", "Октябрь", "Ноябрь", "Декабрь", "Январь", "Февраль", "Март", "Апрель", "Май"])
+        theme = st.text_input("Тема недели", placeholder="Например: Осень, Зима, Весна...")
         
-        prompt_map = {
-            "📅 Тематическое планирование": lambda t: f"Тематический план по «Кустук» на тему: '{t}'. Раздели на федеральный и региональный блоки.",
-            "🎮 Национальные игры": lambda _: f"Подбери якутские национальные игры для {age_group} по «Кустук». Укажи правила, оборудование, развиваемые качества.",
-            "📚 Фольклор и язык": lambda _: f"Подбери якутский фольклор для {age_group} с переводом и методическими рекомендациями.",
-            " Творчество": lambda _: f"Конспект занятия по художественному творчеству в этностиле для {age_group} по «Кустук».",
-            "🤝 Работа с родителями": lambda _: f"Консультация для родителей: «Как поддержать этнокультурное развитие дома по «Кустук»»."
-        }
-
-        theme_k = st.text_input("Тема/Направление (если применимо)")
-        if st.button("📝 Сгенерировать материал"):
-            p_func = prompt_map[kustuk_section]
-            with st.spinner("Генерация..."):
-                res = ask_ai(p_func(theme_k or kustuk_section), ai_model, age_group, True)
-            st.session_state.last_result = res
-            st.markdown(res)
-            show_exports(res, "Кустук")
-            st.divider()
-            if st.button("🖼️ Иллюстрация к материалу"):
-                with st.spinner("Создаю изображение..."):
-                    st.session_state.last_img = generate_image_shevdevrum(f"якутская культура, дети, {kustuk_section}, {age_group}, этностиль, акварель, образовательный постер")
-            if st.session_state.last_img:
-                st.image(st.session_state.last_img, caption=f"Иллюстрация: {kustuk_section}", use_container_width=True)
-
-    elif page == "📖 НПА":
-        st.info("📚 База нормативов в разработке. ИИ работает с актуальными версиями ФОП ДО, ФГОС ДО, СанПиН 2.4.3648-20, 273-ФЗ и методическими рекомендациями.")
-
-    elif page == " Пользователи" and user["role"]=="admin":
-        st.warning("🛡️ Управление аккаунтами. В MVP редактируйте `data/users.json` вручную.")
-        st.code('{"admin@dou.ru": {"password":"bcrypt_hash", "role":"admin", "name":"Заведующая"}}', language="json")
+        if st.button("🤖 Сгенерировать план"):
+            if not theme:
+                st.error("❌ Введите тему недели")
+            else:
+                with st.spinner("⏳ ИИ генерирует календарный план..."):
+                    prompt = f"Создай календарный план на {period} для детей {age_group}. Тема: {theme}. Включи: образовательную деятельность, режимные моменты, работу с родителями."
+                    result = ask_ai(prompt, ai_model, age_group, use_kustuk)
+                    st.markdown(result)
+                    st.download_button("📥 Скачать", result, "plan.txt")
+    
+    elif module == "Диагностика":
+        period = st.selectbox("Период", ["Начало года", "Середина года", "Конец года"])
+        area = st.selectbox("Область", ["Речевое", "Познавательное", "Художественно-эстетическое", "Физическое", "Социально-коммуникативное"])
+        indicators = st.text_area("Наблюдаемые показатели (без ФИО, используйте ID или обобщённо)", height=150)
+        
+        if st.button("🔍 Анализ"):
+            if not indicators:
+                st.error("❌ Введите показатели")
+            else:
+                with st.spinner("⏳ ИИ анализирует диагностику..."):
+                    prompt = f"Проведи анализ диагностики ({period}) для детей {age_group}. Область: {area}. Показатели:\n{indicators}\n\nДай рекомендации по развитию."
+                    result = ask_ai(prompt, ai_model, age_group, use_kustuk)
+                    st.markdown(result)
+                    st.download_button("📥 Скачать PDF", result, "diagnostics.txt")
+    
+    elif module == "ИИ-чат":
+        st.markdown("### 💬 Задайте вопрос ИИ-ассистенту")
+        user_input = st.text_area("Ваш вопрос", height=100, placeholder="Например: Как провести занятие по развитию речи на тему 'Осень'?")
+        
+        if st.button("💬 Отправить"):
+            if not user_input:
+                st.error("❌ Введите вопрос")
+            else:
+                with st.spinner("⏳ ИИ думает..."):
+                    response = ask_ai(user_input, ai_model, age_group, use_kustuk)
+                    st.markdown(response)
+                    st.download_button("📥 Сохранить ответ", response, "answer.txt")
+    
+    elif module == "Программа «Кустук»":
+        st.markdown("""
+        ### 🌈 Региональная программа «Кустук»
+        
+        **Основные направления:**
+        - 🎭 Этнокультурный компонент (якутский фольклор, традиции)
+        - 🎨 Художественно-эстетическое развитие (олонхо, тойук, орнамент)
+        - 🏃 Физическое воспитание (традиционные игры и упражнения)
+        - 🗣️ Речевое развитие (элементы якутского языка)
+        - 👥 Социально-коммуникативное (уважение к старшим, природа)
+        """)
+        
+        topic = st.text_input("Тема занятия", placeholder="Например: Якутские народные игры")
+        
+        if st.button("🤖 Сгенерировать занятие"):
+            if not topic:
+                st.error("❌ Введите тему")
+            else:
+                with st.spinner("⏳ ИИ создаёт занятие..."):
+                    prompt = f"Разработай занятие по программе «Кустук» для детей {age_group}. Тема: {topic}. Включи цели, задачи, оборудование, ход занятия, интеграцию с ФГОС."
+                    result = ask_ai(prompt, ai_model, age_group, use_kustuk=True)
+                    st.markdown(result)
+                    st.download_button("📥 Скачать", result, "kustuk_lesson.txt")
+    
+    elif module == "НПА":
+        st.markdown("""
+        ### 📚 Нормативно-правовые акты
+        
+        **Основные документы:**
+        - 📜 ФЗ-273 "Об образовании в РФ"
+        - 📜 ФГОС ДО (приказ №1155)
+        - 📜 СанПиН 2.4.3648-20
+        - 📜 Профессиональный стандарт педагога
+        - 📜 Региональные нормативы РС(Я)
+        """)
+        
+        doc_type = st.selectbox("Тип документа", ["ФГОС ДО", "СанПиН", "Профстандарт", "ФЗ-273"])
+        question = st.text_area("Ваш вопрос по НПА", height=100)
+        
+        if st.button("🔍 Найти информацию"):
+            if not question:
+                st.error("❌ Введите вопрос")
+            else:
+                with st.spinner("⏳ ИИ ищет информацию..."):
+                    prompt = f"Ответьте на вопрос по {doc_type}: {question}. Ссылайтесь на конкретные пункты и статьи."
+                    result = ask_ai(prompt, ai_model, age_group, False)
+                    st.markdown(result)
+                    st.download_button("📥 Сохранить", result, "npa_answer.txt")
