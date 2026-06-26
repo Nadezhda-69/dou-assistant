@@ -18,20 +18,21 @@ from fpdf import FPDF
 from docx import Document
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-load_dotenv()
+import streamlit as st
 
 # ==================== КОНФИГУРАЦИЯ ====================
 USERS_PATH = "data/users.json"
 PENDING_PATH = "data/pending_users.json"
 os.makedirs("data", exist_ok=True)
 
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
-GIGACHAT_CLIENT_ID = os.getenv("GIGACHAT_CLIENT_ID")
-GIGACHAT_AUTH_KEY = os.getenv("GIGACHAT_AUTH_KEY")
-SMTP_HOST = os.getenv("SMTP_HOST", "smtp.yandex.ru")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
-SMTP_USER = os.getenv("SMTP_USER")
-SMTP_PASS = os.getenv("SMTP_PASS")
+# Загрузка переменных: сначала из st.secrets (Streamlit Cloud), потом из .env (локально)
+DEEPSEEK_API_KEY = st.secrets.get("DEEPSEEK_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
+GIGACHAT_CLIENT_ID = st.secrets.get("GIGACHAT_CLIENT_ID") or os.getenv("GIGACHAT_CLIENT_ID")
+GIGACHAT_CLIENT_SECRET = st.secrets.get("GIGACHAT_CLIENT_SECRET") or os.getenv("GIGACHAT_CLIENT_SECRET")
+SMTP_HOST = st.secrets.get("SMTP_HOST") or os.getenv("SMTP_HOST", "smtp.yandex.ru")
+SMTP_PORT = int(st.secrets.get("SMTP_PORT") or os.getenv("SMTP_PORT", "465"))
+SMTP_USER = st.secrets.get("SMTP_USER") or os.getenv("SMTP_USER")
+SMTP_PASS = st.secrets.get("SMTP_PASS") or os.getenv("SMTP_PASS")
 
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 def load_json(path):
