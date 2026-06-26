@@ -38,7 +38,7 @@ SMTP_PASS = st.secrets.get("SMTP_PASS") or os.getenv("SMTP_PASS")
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 import sqlite3
 import os
-ef hash_pwd(pwd):
+def hash_pwd(pwd):
     """Захешировать пароль"""
     return bcrypt.hashpw(pwd.encode(), bcrypt.gensalt()).decode()
 
