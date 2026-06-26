@@ -38,7 +38,53 @@ SMTP_PASS = st.secrets.get("SMTP_PASS") or os.getenv("SMTP_PASS")
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 import sqlite3
 import os
+ef hash_pwd(pwd):
+    """Захешировать пароль"""
+    return bcrypt.hashpw(pwd.encode(), bcrypt.gensalt()).decode()
 
+def check_pwd(pwd, hashed):
+    """Проверить пароль"""
+    return bcrypt.checkpw(pwd.encode(), hashed.encode())
+
+def init_db():
+    """Инициализировать базу данных"""
+    conn = get_db_connection()
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            email TEXT PRIMARY KEY,
+            password TEXT NOT NULL,
+            name TEXT NOT NULL,
+            role TEXT DEFAULT 'teacher',
+            created TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def get_user(email):
+    """Получить пользователя из БД"""
+    conn = get_db_connection()
+    user = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+    conn.close()
+    return user
+
+def save_user(email, password, name, role="teacher"):
+    """Сохранить пользователя в БД"""
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            "INSERT INTO users (email, password, name, role) VALUES (?, ?, ?, ?)",
+            (email, password, name, role)
+        )
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+
+# Инициализировать БД при старте
+init_db()
 def get_db_connection():
     """Получить соединение с SQLite базой данных"""
     os.makedirs("data", exist_ok=True)
