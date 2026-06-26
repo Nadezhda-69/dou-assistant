@@ -35,7 +35,7 @@ SMTP_PORT = int(st.secrets.get("SMTP_PORT") or os.getenv("SMTP_PORT", "465"))
 SMTP_USER = st.secrets.get("SMTP_USER") or os.getenv("SMTP_USER")
 SMTP_PASS = st.secrets.get("SMTP_PASS") or os.getenv("SMTP_PASS")
 
-# ============== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==============
+# ============== БАЗА ДАННЫХ ==============
 
 def get_db_connection():
     """Получить соединение с SQLite базой данных"""
@@ -64,6 +64,17 @@ def init_db():
             created TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS pending_users (
+            email TEXT PRIMARY KEY,
+            password TEXT NOT NULL,
+            name TEXT NOT NULL,
+            role TEXT DEFAULT 'teacher',
+            code TEXT NOT NULL,
+            expires TIMESTAMP NOT NULL,
+            created TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -88,6 +99,36 @@ def save_user(email, password, name, role="teacher"):
         return False
     finally:
         conn.close()
+
+def save_pending_user(email, password, name, code, expires, role="teacher"):
+    """Сохранить пользователя в ожидании подтверждения"""
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO pending_users (email, password, name, role, code, expires) VALUES (?, ?, ?, ?, ?, ?)",
+            (email, password, name, role, code, expires)
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Ошибка сохранения pending: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_pending_user(email):
+    """Получить пользователя в ожидании"""
+    conn = get_db_connection()
+    user = conn.execute("SELECT * FROM pending_users WHERE email = ?", (email,)).fetchone()
+    conn.close()
+    return user
+
+def delete_pending_user(email):
+    """Удалить пользователя из pending"""
+    conn = get_db_connection()
+    conn.execute("DELETE FROM pending_users WHERE email = ?", (email,))
+    conn.commit()
+    conn.close()
 
 def send_code_email(email, code):
     """Отправить код подтверждения на email"""
@@ -122,7 +163,6 @@ init_db()
 
 @st.cache_resource(ttl=1700)
 def get_gigachat_token():
-    import base64
     auth_string = f"{GIGACHAT_CLIENT_ID}:{GIGACHAT_CLIENT_SECRET}"
     auth_bytes = base64.b64encode(auth_string.encode()).decode()
     headers = {
@@ -132,7 +172,7 @@ def get_gigachat_token():
         "RqUID": str(uuid.uuid4())
     }
     data = {"scope": "GIGACHAT_API_PERS"}
-    resp = requests.post("https://ngw.devices.sberbank.ru:9443/api/v2/oauth", headers=headers, data=data)
+    resp = requests.post("https://ngw.devices.sberbank.ru:9443/api/v2/oauth", headers=headers, data=data, verify=False)
     resp.raise_for_status()
     return resp.json()["access_token"]
 
@@ -165,7 +205,7 @@ def ask_ai(prompt, model, age_group, use_kustuk=False):
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
                 "temperature": 0.3
             }
-            resp = requests.post("https://gigachat.devices.sberbank.ru/api/v1/chat/completions", headers=headers, json=payload)
+            resp = requests.post("https://gigachat.devices.sberbank.ru/api/v1/chat/completions", headers=headers, json=payload, verify=False)
             resp.raise_for_status()
             return resp.json()["choices"][0]["message"]["content"]
         else:
@@ -225,16 +265,18 @@ elif st.session_state.auth_step == "register":
             else:
                 code = "".join(random.choices(string.digits, k=6))
                 hashed = hash_pwd(p1)
-                pending = {em: {"name": name, "password": hashed, "role": "teacher", "code": code, "expires": (datetime.now() + timedelta(minutes=15)).isoformat()}}
-                save_json(PENDING_PATH, pending)
+                expires = (datetime.now() + timedelta(minutes=15)).isoformat()
                 
-                if send_code_email(em, code):
-                    st.session_state.pending_email = em
-                    st.session_state.auth_step = "verify"
-                    st.success("✅ Код отправлен. Проверьте папку «Спам».")
-                    st.rerun()
+                if save_pending_user(em, hashed, name, code, expires, "teacher"):
+                    if send_code_email(em, code):
+                        st.session_state.pending_email = em
+                        st.session_state.auth_step = "verify"
+                        st.success("✅ Код отправлен. Проверьте папку «Спам».")
+                        st.rerun()
+                    else:
+                        st.error("❌ Ошибка отправки email. Проверьте настройки SMTP.")
                 else:
-                    st.error("❌ Ошибка отправки email. Проверьте настройки SMTP.")
+                    st.error("❌ Ошибка сохранения данных")
     
     if st.button("← Назад"):
         st.session_state.auth_step = "login"
@@ -247,21 +289,33 @@ elif st.session_state.auth_step == "verify":
     code_input = st.text_input("Код из email")
     
     if st.button("Подтвердить"):
-        pending = load_json(PENDING_PATH)
         em = st.session_state.get("pending_email", "")
+        pending = get_pending_user(em)
         
-        if em in pending and pending[em]["code"] == code_input:
-            hashed = pending[em]["password"]
-            if save_user(em, hashed, pending[em]["name"], "teacher"):
-                del pending[em]
-                save_json(PENDING_PATH, pending)
-                st.success("✅ Регистрация успешна! Теперь войдите.")
-                st.session_state.auth_step = "login"
+        if pending:
+            # Проверка срока действия
+            try:
+                expires = datetime.fromisoformat(pending["expires"])
+                if datetime.now() > expires:
+                    st.error("❌ Срок действия кода истёк. Зарегистрируйтесь заново.")
+                    delete_pending_user(em)
+                    st.rerun()
+            except:
+                st.error("❌ Ошибка проверки срока")
                 st.rerun()
+            
+            if pending["code"] == code_input:
+                if save_user(em, pending["password"], pending["name"], pending["role"]):
+                    delete_pending_user(em)
+                    st.success("✅ Регистрация успешна! Теперь войдите.")
+                    st.session_state.auth_step = "login"
+                    st.rerun()
+                else:
+                    st.error("❌ Ошибка сохранения пользователя")
             else:
-                st.error("❌ Ошибка сохранения")
+                st.error("❌ Неверный код")
         else:
-            st.error("❌ Неверный код или срок истёк")
+            st.error("❌ Пользователь не найден. Зарегистрируйтесь заново.")
     
     if st.button("← Назад"):
         st.session_state.auth_step = "login"
